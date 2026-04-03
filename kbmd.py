@@ -14,10 +14,10 @@ STATUS_MAP = {
     "Blocked": "Blocked / External",
     "In Review": "Blocked / External",
 }
+
 data = {col: [] for col in COLUMNS}
 current_col = 0
 current_row = 0
-filter_text = ""
 
 # -------------------------
 # Persistence
@@ -52,17 +52,16 @@ def merge_csv(filepath):
         reader = csv.DictReader(f)
         for row in reader:
             key = row.get("Issue key", "")
+            if not key:
+                continue
+            seen_ids.add(key)
             summary = row.get("Summary", "")
             status = row.get("Status", "")
             desc = row.get("Description", "")
             priority = row.get("Priority", "")
             due = row.get("Due date", "")
-
-            if not key:
-                continue
-            seen_ids.add(key)
             if key in existing:
-                col, task = existing[key]
+                _, task = existing[key]
                 task.update({
                     "title": summary,
                     "description": desc,
@@ -86,13 +85,12 @@ def merge_csv(filepath):
     for col in COLUMNS:
         data[col] = [
             t for t in data[col]
-            if t["source"] != "jira" or t["id"] in seen_ids
+            if t.get("source") != "jira" or t["id"] in seen_ids
         ]
 
 # -------------------------
 # UI Helpers
 # -------------------------
-
 def draw_box(stdscr, y, h, w, x, title=""):
     win = stdscr.subwin(h, w, y, x)
     win.box()
@@ -102,34 +100,15 @@ def draw_box(stdscr, y, h, w, x, title=""):
 def wrap_text(text, width):
     return textwrap.wrap(text, width)
 
-def filter_tasks(tasks):
-    if not filter_text:
-        return tasks
-    q = filter_text.lower()
-    return [t for t in tasks if q in t["title"].lower() or q in t.get("description","").lower()]
-
 def clamp_cursor():
     global current_row
     col = COLUMNS[current_col]
-    tasks = filter_tasks(data[col])
-    max_row = max(len(tasks) - 1, 0)
+    max_row = max(len(data[col]) - 1, 0)
     current_row = max(0, min(current_row, max_row))
-
-def get_filtered_indices(col): #Return list of indices in data[col] that match filter
-    tasks = data[col]
-    if not filter_text:
-        return list(range(len(tasks)))
-    q = filter_text.lower()
-    return [
-        i for i, t in enumerate(tasks)
-        if q in t["title"].lower()
-        or q in t.get("description", "").lower()
-    ]
 
 # -------------------------
 # Modal
 # -------------------------
-
 def open_task_modal(stdscr, task):
     h, w = stdscr.getmaxyx()
     mh, mw = h // 2, w // 2
@@ -138,19 +117,14 @@ def open_task_modal(stdscr, task):
     fields = ["title", "description", "priority", "due"]
     idx = 0
     scroll = 0
-
     while True:
         win.clear()
         win.box()
         win.addstr(1, 2, task["id"], curses.A_BOLD)
-
-        # Fields
         for i, field in enumerate(fields):
             val = str(task.get(field, ""))
             marker = ">" if i == idx else " "
             win.addstr(3 + i, 2, f"{marker} {field}: {val[:mw-6]}")
-
-        # Description view
         desc_lines = wrap_text(task.get("description", ""), mw - 6)
         visible = desc_lines[scroll:scroll + (mh - 10)]
         for i, line in enumerate(visible):
@@ -176,12 +150,11 @@ def open_task_modal(stdscr, task):
 # -------------------------
 # Actions
 # -------------------------
-
 def add_task_modal(stdscr):
     h, w = stdscr.getmaxyx()
     mh, mw = 10, w // 2
     y, x = h // 2 - mh // 2, w // 4
-    win = curses.newwin(mh, mw, y, x)
+    win = curses.newwin(mh, mw, y, x)    
     win.box()
     curses.echo()
     fields = ["title", "description", "priority", "due"]
@@ -197,9 +170,9 @@ def add_task_modal(stdscr):
             win.addstr(3 + i, 2, f"{marker} {f}: {val[:mw-6]}")
         win.addstr(mh - 2, 2, "[Enter] edit [Tab] next [s] save [q] cancel")
         key = win.getch()
-        if key == 9:  # TAB
+        if key == 9:
             idx = (idx + 1) % len(fields)
-        elif key in [10, 13]:  # ENTER
+        elif key in [10, 13]:
             field = fields[idx]
             win.addstr(3 + idx, 2, f"> {field}: ")
             val = win.getstr().decode("utf-8")
@@ -241,41 +214,37 @@ def move_task(direction):
 def move_within_column(direction):
     global current_row
     col = COLUMNS[current_col]
-    indices = get_filtered_indices(col)
-    if not indices:
+    tasks = data[col]
+    if len(tasks) <= 1:
         return
-    real_idx = indices[current_row] # Map visible row → actual index
-    new_visible_row = current_row + direction
-    if not (0 <= new_visible_row < len(indices)): # Bounds check in filtered space
+    new_row = current_row + direction
+    if not (0 <= new_row < len(tasks)):
         return
-    swap_idx = indices[new_visible_row]
-    data[col][real_idx], data[col][swap_idx] = data[col][swap_idx], data[col][real_idx] # Swap in real data
-    current_row = new_visible_row # Move cursor with it
+    tasks[current_row], tasks[new_row] = tasks[new_row], tasks[current_row]
+    current_row = new_row
 
 # -------------------------
 # Draw
 # -------------------------
-
 def draw(stdscr):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     col_width = w // len(COLUMNS)
-    # HEADER 
+    # HEADER
     repo = os.path.basename(os.getcwd())
     now = datetime.now().strftime("%H:%M")
     draw_box(stdscr, 0, 3, w, 0)
     stdscr.addstr(1, 2, f"KANBAN | {repo} | {now}")
-    # BODY    
+    # BODY
     body_y = 3
-    body_h = h - 6 # leaves space for footer
+    body_h = h - 6
     for i, col in enumerate(COLUMNS):
         x = i * col_width
-        # Column box
         draw_box(stdscr, body_y, body_h, col_width, x, col)
-        tasks = filter_tasks(data[col])
-        visible_rows = max(len(tasks), 1)  # ← key idea
+        tasks = data[col]
+        visible_rows = max(len(tasks), 1)
         for j in range(visible_rows):
-            y = body_y + 1 + j  # inside box
+            y = body_y + 1 + j
             if j < len(tasks):
                 task = tasks[j]
                 label = f"{task['id']} [{task.get('priority','')}] {task['title']}"
@@ -288,47 +257,49 @@ def draw(stdscr):
             else:
                 attr = curses.A_NORMAL
             stdscr.addstr(y, x + 2, label[:col_width - 4], attr)
-    # FOOTER (boxed)
+    # FOOTER
     draw_box(stdscr, h - 3, 3, w, 0)
     stdscr.addstr(
         h - 2, 2,
-        "[a] add [d] del [H/L] move [Enter] open [/] search [r] reload [q] quit"
+        "[a] add [d] del [H/L] move [J/K] reorder [Enter] open [r] reload [q] quit"
     )
     stdscr.refresh()
+
 # -------------------------
 # Main
 # -------------------------
-
 def main(stdscr):
-    global current_col, current_row, filter_text
+    global current_col, current_row
     curses.curs_set(0)
     load_data()
     while True:
         draw(stdscr)
         key = stdscr.getch()
         col = COLUMNS[current_col]
-        # Move Cursor
+        # Navigation
         if key in [curses.KEY_LEFT, ord('h')]:
             current_col = max(0, current_col - 1)
-            current_row = 0
+            current_row = 0 
         elif key in [curses.KEY_DOWN, ord('j')]:
-            current_row += 1
+            if current_row < len(data[col]) - 1:
+                current_row += 1
         elif key in [curses.KEY_UP, ord('k')]:
-            current_row -= 1
+            if current_row > 0:
+                current_row -= 1
         elif key in [curses.KEY_RIGHT, ord('l')]:
             current_col = min(len(COLUMNS) - 1, current_col + 1)
             current_row = 0
-        # Move Task Under Cursor
-        elif key == ord('H'):
+        # Moving Tasks
+        elif key in [curses.KEY_SLEFT, ord('H')]:
             move_task(-1)
             save_data()
-        elif key == ord('J'):
+        elif key in [curses.KEY_SDOWN, ord('J')]:
             move_within_column(1)
             save_data()
-        elif key == ord('K'):
+        elif key in [curses.KEY_SUP, ord('K')]:
             move_within_column(-1)
             save_data()
-        elif key == ord('L'):
+        elif key in [curses.KEY_SRIGHT, ord('L')]:
             move_task(1)
             save_data()
         # Actions
@@ -340,16 +311,10 @@ def main(stdscr):
         elif key == ord('d'):
             delete_task()
             save_data()
-        elif key in [10, 13]: # If they press Enter
+        elif key in [10, 13]:
             if data[col]:
                 open_task_modal(stdscr, data[col][current_row])
                 save_data()
-        elif key == ord('/'):
-            curses.echo()
-            stdscr.addstr(0, 0, "/")
-            filter_text = stdscr.getstr().decode("utf-8")
-            curses.noecho()
-            current_row = 0
         elif key == ord('r'):
             curses.echo()
             stdscr.addstr(0, 0, "CSV path: ")
