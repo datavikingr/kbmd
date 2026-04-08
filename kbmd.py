@@ -1,131 +1,181 @@
+# FULL UPDATED VERSION WITH INTERACTIVE SUBTASKS
+# Key upgrades:
+# - Safe rendering (no curses crash)
+# - Children displayed cleanly
+# - Flattened tree with parent tracking
+# - Subtasks fully navigable + deletable
+
 import curses
-import curses.textpad 
+import curses.textpad
 import os
 import json
 import time
 from datetime import datetime
 
 COLUMNS = ["Backlog", "In Progress", "Blocked / External"]
+HIDDEN_COLUMN = "Done"
 
 data = {
-    "columns": {col: [] for col in COLUMNS},
+    "columns": {col: [] for col in COLUMNS + [HIDDEN_COLUMN]},
     "next_id": 1
 }
+
 current_col = 0
-current_row = 0
+current_index = 0  # index into flattened list
 
 # -------------------------
 # Persistence
 # -------------------------
-def get_data_file(): # find the save file helper 
-    # different projects have different todo lists.
-    # therefore, local file. feel free to track in vc or add to gitignore
-    return os.path.join(os.getcwd(), ".kanban.json") # grab the local file 
 
-def save_data(): # writes data to local file 
-    with open(get_data_file(), "w") as f: # get local file, open it 
-        json.dump(data, f, indent=2) # write the data 
+def get_data_file():
+    return os.path.join(os.getcwd(), ".kanban.json")
 
-def load_data(): # sets app state to that of local file 
-    global data # set global variable
-    # if the file doesn't exist, that just means this is new directory and we should start with a new file
-    try: # find file path ...
-        with open(get_data_file(), "r") as f: # get local file if it exists
-            data = json.load(f) # set the global datastream to match file state 
-    except: # ... graceful "or not" path 
-        pass # then nothing, init as from scratch
+def save_data():
+    with open(get_data_file(), "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_data():
+    global data
+    try:
+        with open(get_data_file(), "r") as f:
+            data = json.load(f)
+    except:
+        pass
 
 def get_next_id():
-    nid = data.get("next_id", 1) # get the json's next_id variable 
-    data["next_id"] = nid + 1 # iterate the global next_id in the datastream 
-    return f"{nid:05d}" # return the integer with 5 places
+    nid = data.get("next_id", 1)
+    data["next_id"] = nid + 1
+    return f"{nid:05d}"
+
+# -------------------------
+# Tree Helpers
+# -------------------------
+
+def flatten_tasks(tasks, parent=None, depth=0, prefix=""):
+    flat = []
+    for i, t in enumerate(tasks):
+        is_last = (i == len(tasks) - 1)
+        connector = "└" if is_last else "├"
+        line_prefix = prefix + connector if depth > 0 else ""
+        flat.append({
+            "task": t,
+            "parent": parent,
+            "index": i,
+            "depth": depth,
+            "prefix": line_prefix
+        })
+        extension = " " if is_last else "│"
+        flat.extend(flatten_tasks(t.get("children", []), t, depth + 1, prefix + extension))
+    return flat
 
 # -------------------------
 # UI Helpers
 # -------------------------
-def draw_box(stdscr, y, h, w, x, title="", color=1): # build modal
-    try: # try to draw to screen buffer 
-        attr = curses.color_pair(color) # get color
-        stdscr.addstr(y, x, "┌" + "─" * (w - 2) + "┐", attr)  # top line of box 
-        for i in range(1, h - 1): # walls to desired height, minus the floor
-            stdscr.addstr(y + i, x, "│" + " " * (w - 2) + "│", attr) # each wall 
-        stdscr.addstr(y + h - 1, x, "└" + "─" * (w - 2) + "┘", attr) # floor
-        if title: # if the modal was passed a title, then 
-            stdscr.addstr(y, x + 2, f" {title} ", attr | curses.A_BOLD) # write the title to the box, boldly.
-    except curses.error: # if we can't draw that for some reason,
-        pass # simply don't, rather than break the application
 
-def clamp_cursor(): # Keep the cusor in bounds 
-    global current_row # forcefully set y 
-    col = COLUMNS[current_col] # determine x
-    max_row = max(len(data["columns"][col]), 1) # max y is the vertical length of the given column above, minus 1 for 0-indexing
-    current_row = max(0, min(current_row, max_row)) # apply constraint current row to the bounds of the arena
+def draw_box(stdscr, y, h, w, x, title="", color=1):
+    try:
+        attr = curses.color_pair(color)
+        stdscr.addstr(y, x, "┌" + "─" * (w - 2) + "┐", attr)
+        for i in range(1, h - 1):
+            stdscr.addstr(y + i, x, "│" + " " * (w - 2) + "│", attr)
+        stdscr.addstr(y + h - 1, x, "└" + "─" * (w - 2) + "┘", attr)
+        if title:
+            stdscr.addstr(y, x + 2, f" {title} ", attr | curses.A_BOLD)
+    except curses.error:
+        pass
 
 # -------------------------
-# Modal Input Engine
+# Modal
 # -------------------------
-def form_modal(stdscr, title, fields, values):
+
+def form_modal(stdscr, title, fields, values, task=None):
     h, w = stdscr.getmaxyx()
-    mh, mw = len(fields) * 2 + 6, w // 2
+    mh, mw = len(fields) * 2 + 8, w // 2
     y, x = h // 2 - mh // 2, w // 4
     curses.curs_set(1)
-    idx = 0  # start at first field 
+    idx = 0
+
     while True:
-        # constrain idx to valid field range
         idx = max(0, min(idx, len(fields) - 1))
         f = fields[idx]
+
         stdscr.erase()
         draw(stdscr)
         draw_box(stdscr, y, mh, mw, x, title)
-        # Draw all fields (show values from previous edits)
+
         for i, field in enumerate(fields):
-            label_y = y + 2 + i * 2
-            label_x = x + 2
-            stdscr.addstr(label_y, label_x, f"{field}:")
-            box_x = label_x + len(field) + 2
+            ly = y + 2 + i * 2
+            lx = x + 2
+            stdscr.addstr(ly, lx, f"{field}:")
+            box_x = lx + len(field) + 2
             box_w = mw - len(field) - 6
-            display_text = values[field][:box_w-1]
-            stdscr.addstr(label_y, box_x, display_text.ljust(box_w - 1))
+            display = values[field][:box_w - 1]
+            stdscr.addstr(ly, box_x, display.ljust(box_w - 1))
+
             if i == idx:
                 stdscr.attron(curses.A_REVERSE)
-                stdscr.addstr(label_y, label_x, f"{field}:")
+                stdscr.addstr(ly, lx, f"{field}:")
                 stdscr.attroff(curses.A_REVERSE)
+
+        # CHILDREN DISPLAY
+        if task:
+            children = task.get("children", [])
+            cy = y + len(fields) * 2 + 2
+            stdscr.addstr(cy, x + 2, f"Subtasks ({len(children)}):")
+            for i, c in enumerate(children[:5]):
+                line = f"{c.get('id')} - {c.get('title')}"
+                stdscr.addstr(cy + i + 1, x + 4, line[:mw - 6])
+        
         stdscr.addstr(y + mh - 2, x + 2, "[Tab] next  [Shift+Tab] prev  [Enter] save  [Esc] cancel")
         stdscr.refresh()
-        # Input window for active field
-        label_y = y + 2 + idx * 2
+
+        ly = y + 2 + idx * 2
         box_x = x + len(f) + 4
         box_w = mw - len(f) - 8
-        editwin = curses.newwin(1, box_w, label_y, box_x)
-        editwin.addstr(0, 0, values[f])
+
+        editwin = curses.newwin(1, box_w, ly, box_x)
+        editwin.addstr(0, 0, values[f][:box_w - 1])
+
         box = curses.textpad.Textbox(editwin)
+
         def validator(ch):
-            if ch in (27,):  # ESC → cancel
+            if ch == 27: # Esc 
                 raise KeyboardInterrupt
-            if ch == 9:  # Tab → next field
+            if ch == 9: # Tab 
                 raise EOFError
-            if ch == 353:  # Shift+Tab → prev field
+            if ch == 353: # Shift + Tab 
                 raise ValueError
-            if ch in (10, 13):  # Enter → end editing
-                return 7  # Ctrl+G ends editing for this field
-            return ch 
+            if ch in (10, 13): # Enter 
+                raise StopIteration
+            if ch == curses.KEY_DOWN:  # ↓
+                raise EOFError 
+            if ch == curses.KEY_UP:  # ↑
+                raise ValueError
+            return ch
+
         try:
             text = box.edit(validator).strip()
             values[f] = text
-            idx += 1  # next field
-        except EOFError:  # Tab pressed
+            idx += 1
+        except EOFError:
             values[f] = box.gather().strip()
             idx += 1
-        except ValueError:  # Shift+Tab pressed
+        except ValueError:
             values[f] = box.gather().strip()
             idx -= 1
-        except KeyboardInterrupt:  # ESC pressed → cancel modal
+        except KeyboardInterrupt:
             curses.curs_set(0)
-            return None 
+            return None
+        except StopIteration:
+            values[f] = box.gather().strip()
+            curses.curs_set(0)
+            return values
+
         if idx >= len(fields):
-            break  # all fields completed
+            break
+
     curses.curs_set(0)
-    return values 
+    return values
 
 # -------------------------
 # Modals
@@ -136,19 +186,21 @@ def add_task_modal(stdscr):
     result = form_modal(stdscr, "New Task", fields, values)
     if result and result["title"]:
         return {
-            "id": get_next_id(),
+            "id": "LOCAL-" + get_next_id(),
             "title": result["title"],
             "description": result["description"],
             "priority": result["priority"],
             "due": result["due"],
-            "created": time.time(),
+            "created": time.strftime("%Y-%m-%d %H:%M", time.localtime()),
+            "completed_at": None,
+            "children": []
         }
     return None
 
 def open_task_modal(stdscr, task):
     fields = ["title", "description", "priority", "due"]
     values = {f: str(task.get(f, "")) for f in fields}
-    result = form_modal(stdscr, task["id"], fields, values)
+    result = form_modal(stdscr, task["id"], fields, values, task)
     if result:
         task.update(result)
 
@@ -170,186 +222,367 @@ def confirm_modal(stdscr, message):
         elif key in [ord('n'), ord('N'), 27]:  # ESC = cancel
             return False
 
+def show_completed_modal(stdscr):
+    tasks = data["columns"].get(HIDDEN_COLUMN, [])
+    if not tasks:
+        return
+
+    # Flatten tasks (including subtasks)
+    def flatten_with_subtasks(tasks):
+        flat_list = []
+        for t in tasks:
+            flat_list.append((t, 0))  # (task, depth)
+            children = t.get("children", [])
+            for c in children:
+                flat_list.append((c, 1))  # subtasks indented
+        return flat_list
+
+    flat = flatten_with_subtasks(tasks)
+
+    h, w = stdscr.getmaxyx()
+    mh, mw = min(30, h-4), min(80, w-4)
+    y, x = h//2 - mh//2, w//2 - mw//2
+
+    offset = 0  # scrolling offset
+    while True:
+        stdscr.erase()
+        draw(stdscr)  # draw background
+        draw_box(stdscr, y, mh, mw, x, "Completed Tasks", color=2)
+
+        # Display visible window
+        line_idx = 0
+        i = offset
+        while line_idx < mh-2 and i < len(flat):
+            task, depth = flat[i]
+
+            # Header
+            header = "  " * depth + f"## {task.get('title','')} ######"
+            if line_idx < mh-2:
+                stdscr.addstr(y + 1 + line_idx, x + 2, header[:mw-4])
+                line_idx += 1
+
+            # Key-values
+            for k in ["id","title","description","priority","created","due","completed_at"]:
+                if k in task:
+                    val = task[k]
+                    line = "  " * depth + f"{k} : {val}"
+                    if line_idx < mh-2:
+                        stdscr.addstr(y + 1 + line_idx, x + 2, line[:mw-4])
+                        line_idx += 1
+            i += 1
+            if line_idx < mh-2:
+                line_idx += 1 
+
+        # Footer
+        stdscr.addstr(y + mh - 2, x + 2, "[UP/DOWN] scroll  [q] close")
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in [ord('q'), 27]:  # q or ESC
+            break
+        elif key in [curses.KEY_DOWN, ord('j')]:
+            if offset < len(flat) - 1:
+                offset += 1
+        elif key in [curses.KEY_UP, ord('k')]:
+            if offset > 0:
+                offset -= 1
+
 # -------------------------
 # Actions
 # -------------------------
-def delete_task():
-    col = COLUMNS[current_col]
-    if current_row < len(data["columns"][col]):
-        data["columns"][col].pop(current_row)
+def complete_task(flat):
+    global current_index
+    if current_index >= len(flat):
+        return
+    item = flat[current_index]
+    task = item["task"]
+    parent = item["parent"]
+    # Remove from current location
+    if parent is None:
+        col = COLUMNS[current_col]
+        data["columns"][col].pop(item["index"])
+    else:
+        parent["children"].pop(item["index"])
+    task["completed_at"] = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    data["columns"][HIDDEN_COLUMN].append(task) # Add to hidden column 
+    current_index = max(0, current_index - 1)
 
-def move_task(direction):
-    global current_col, current_row
+def delete_task(flat_list):
+    global current_index
+    if not flat_list:
+        return
+    item = flat_list[current_index]
+    parent = item["parent"]
+    idx = item["index"]
+    if parent is None:
+        col = COLUMNS[current_col]
+        data["columns"][col].pop(idx)
+    else:
+        parent["children"].pop(idx)
+    current_index = max(0, current_index - 1)
+
+def move_task(direction, flat):
+    global current_col, current_index
+    if current_index >= len(flat):
+        return
+    item = flat[current_index]
+    task = item["task"]
+    parent = item["parent"]
+    # Only allow top-level tasks to move columns
+    if parent is not None:
+        return
     col = COLUMNS[current_col]
-    if current_row >= len(data["columns"][col]):
-        return 
-    task = data["columns"][col].pop(current_row)
-    new_col = current_col + direction 
+    idx = item["index"]
+    task = data["columns"][col].pop(idx)
+    new_col = current_col + direction
     if 0 <= new_col < len(COLUMNS):
         data["columns"][COLUMNS[new_col]].append(task)
         current_col = new_col
-        current_row = len(data["columns"][COLUMNS[new_col]]) - 1
+        current_index = len(flatten_tasks(data["columns"][COLUMNS[new_col]])) - 1
     else:
-        data["columns"][col].insert(current_row, task)
+        data["columns"][col].insert(idx, task)
 
-def move_within_column(direction):
-    global current_row
-    col = COLUMNS[current_col]
-    tasks = data["columns"][col]
-    if len(tasks) <= 1:
-        return 
-    new_row = current_row + direction
-    if not (0 <= new_row < len(tasks)):
-        return 
-    tasks[current_row], tasks[new_row] = tasks[new_row], tasks[current_row]
-    current_row = new_row
+def move_within_column(direction, flat):
+    global current_index
+    if current_index >= len(flat):
+        return
+    item = flat[current_index]
+    parent = item["parent"]
+    idx = item["index"]
+    # Determine sibling list
+    if parent is None:
+        siblings = data["columns"][COLUMNS[current_col]]
+    else:
+        siblings = parent["children"]
+    if len(siblings) <= 1:
+        return
+    new_idx = idx + direction
+    if not (0 <= new_idx < len(siblings)):
+        return
+    task = siblings.pop(idx)
+    siblings.insert(new_idx, task)
+    new_flat = flatten_tasks(data["columns"][COLUMNS[current_col]])
+    for i, it in enumerate(new_flat):
+        if it["task"] is task:
+            current_index = i
+            break
+
+def promote(flat):
+    global current_index
+    item = flat[current_index]
+    parent = item["parent"]
+    if parent is None:
+        return
+    grandparent = None
+    for f in flat:
+        if f["task"] is parent:
+            grandparent = f["parent"]
+            break
+    parent["children"].pop(item["index"])
+    if grandparent is None:
+        data["columns"][COLUMNS[current_col]].append(item["task"])
+    else:
+        grandparent["children"].append(item["task"])
+
+
+def demote(flat):
+    global current_index
+    if current_index == 0:
+        return
+    item = flat[current_index]
+    prev = flat[current_index - 1]
+    siblings = data["columns"][COLUMNS[current_col]] if item["parent"] is None else item["parent"]["children"]
+    siblings.pop(item["index"])
+    prev["task"].setdefault("children", []).append(item["task"])
 
 # -------------------------
 # Draw
 # -------------------------
 def draw(stdscr):
-    # Screen Construction
-    h, w = stdscr.getmaxyx() # get the lay of the canvas
-    stdscr.erase() # wipe the canvas clean
-    col_width = w // len(COLUMNS) # 3 columns. Divide total width by 3, sans remainder, get column width.
-    # Header box
-    draw_box(stdscr, 0, 3, (col_width * 3), 0) # draw title box  
-    repo = os.path.basename(os.getcwd()) # find the name of the 'repo' by getting cwd 
-    now = datetime.now().strftime("%H:%M")# time check, because I code at night 
-    stdscr.addstr(1, 2, "KBMD") # write title in top left inside of box 
-    stdscr.addstr(1, (w // 2) - (len(repo) // 2), repo) # write cwd in center, inside box 
-    stdscr.addstr(1, w - len(now) - 4, now) # write time in top right, inside box 
-    # Body of application 
-    body_y = 3 # starting vertical index for body (remember: index at 0)
-    body_h = h - 6 # vertical height of body, leaving space for header and footer
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+
+    col_width = w // len(COLUMNS)
+
+    draw_box(stdscr, 0, 3, w, 0)
+    repo = os.path.basename(os.getcwd())
+    now = datetime.now().strftime("%H:%M")
+
+    stdscr.addstr(1, 2, "KBMD")
+    stdscr.addstr(1, (w // 2) - (len(repo) // 2), repo)
+    stdscr.addstr(1, w - len(now) - 4, now)
+
+    body_y = 3
+    body_h = h - 6
+
     for i, col in enumerate(COLUMNS):
         x = i * col_width
-        # ["Backlog":"CYAN":4,"In Progress":"GREEN":2,"Blocked / External":"RED":3]
-        if col == "Backlog":
-            color = 4
-        elif col == "In Progress":
-            color = 2
-        elif col == "Blocked / External":
-            color = 3
-        else:
-            color = 1
+
+        color = 4 if col == "Backlog" else 2 if col == "In Progress" else 3
+
         draw_box(stdscr, body_y, body_h, col_width, x, col, color)
-        tasks = data["columns"][col] # find this column in the global data stream
-        rows = len(tasks) # count tasks in this column
-        for j in range(rows + 1): # iterate over the rows set above 
-            y = body_y + 1 + j # determine location, body "zero" plus border plus task #
-            if j < rows: # if current iteration is less than the number of tasks set above  
-                task = tasks[j] # assign this task's data to this object 
-                label = f"[{task.get('priority','')}] {task['title']}" # and build our "task object" from the UI perspective
-            else: # if the current iteration = actual task length set above, then
-                label = "[ + ]" # we draw the add-task button
-            if i == current_col and j == current_row: # if list item is currently selected, then 
-                attr = curses.A_REVERSE | curses.A_BOLD # boldly reverse colors 
-            elif i == current_col: # If cursor is in this column, then 
-                attr = curses.A_BOLD # be bold 
-            else: # otherwise, 
-                attr = curses.A_NORMAL # just be normal
-            try: # try to 
-                if j < rows: # if this is a task, then 
-                    stdscr.addstr(y, x + 2, label[:col_width - 4], attr) # write the task to the buffer 
-                else: # otherwise, 
+
+        flat = flatten_tasks(data["columns"][col])
+
+        for j in range(len(flat) + 1):
+            y = body_y + 1 + j
+            if j < len(flat):
+                item = flat[j]
+                task = item["task"]
+                depth = item["depth"]
+                prefix = item.get("prefix", "")
+                label = f"{prefix}[{task.get('priority','')}] {task['title']}"
+            else:
+                label = "[ + ]"
+            if i == current_col and j == current_index:
+                attr = curses.A_REVERSE | curses.A_BOLD
+            elif i == current_col:
+                attr = curses.A_BOLD
+            else:
+                attr = curses.A_NORMAL
+            try:
+                if label == "[ + ]": # if this isn't a task, then 
                     centered_x = x + (col_width - len(label)) // 2 # find the center of the column
                     stdscr.addstr(y, centered_x, label, attr) # write the [ + ] button to the center 
+                else: # otherwise
+                    stdscr.addstr(y, x + 2, label[:col_width - 4], attr) # write the task to the buffer 
             except: # if that doesn't work,
                 pass # do nothing, rather than break the application
-    # Footer box 
-    draw_box(stdscr, h - 3, 3, w, 0) # draw the footer box 
-    stdscr.addstr(h - 2, 2, "[a] add [d] del [H/L] move [J/K] reorder [Enter] open [q] quit") # write the footer text
-    stdscr.noutrefresh() # build the changes for the frame buffer to execute after timer completes, .1 s from now.
+
+    draw_box(stdscr, h - 3, 3, w, 0)
+    stdscr.addstr(h - 2, 2, "[a] add [s] sub [c] complete [d] delete [H/L] status [J/K] priority [tab] demote [TAB] promote [Enter] select [q] quit") # write the footer text
+    stdscr.noutrefresh()
 
 # -------------------------
 # Main
 # -------------------------
-def main(stdscr):
-# INIT    
-    global current_col, current_row # establish global variables: cursor focus y & x, respectively
-    curses.curs_set(0) 
-    stdscr.nodelay(True) # When I say, draw, you draw 
-    curses.start_color() # init color
-    curses.use_default_colors() # establish the foundation
-    curses.init_pair(1, curses.COLOR_WHITE, -1) # set default
-    curses.init_pair(2, curses.COLOR_GREEN, -1) # set in progress
-    curses.init_pair(3, curses.COLOR_RED, -1) # set blocked/external
-    curses.init_pair(4, curses.COLOR_CYAN, -1)  # backlog
-    load_data() # what it says on the can
-    needs_redraw = True # write what just loaded to screen
-# MAIN LOOP    
-    while True: # loop
-        # screen buffer
-        if needs_redraw: # if reality and expected screens are different, then
-            draw(stdscr) # draw the buffer to match expected
-            curses.doupdate() # update the screen itself to match the buffer
-            needs_redraw = False # reset state to zero
-        key = stdscr.getch() # check for input
-        if key == -1: # if nothing is entered, then
-            time.sleep(0.01) # wait - this is the actual mechanism of the buffer, the 'delay' portion
-            continue # repeat parent while-loop from the top
-        col = COLUMNS[current_col] # where am I
-        # Move Cursor Left 
-        if key in [curses.KEY_LEFT, ord('h')]: # input left
-            current_col = max(0, current_col - 1) # go left, clamped so the focus/cursor doesn't wander off into the night
-            current_row = 0 # start focus/cursor at the top, index 0
-       # Move Cursor Right 
-        elif key in [curses.KEY_RIGHT, ord('l')]: # input right
-            current_col = min(len(COLUMNS) - 1, current_col + 1) # go right, clamped so the focus/cursor doesn't wander off
-            current_row = 0 # start from the top, index 0
-        # Move Cursor Down 
-        elif key in [curses.KEY_DOWN, ord('j')]: # input down
-            current_row += 1 # iterate cursor down a position
-        # Move Cursor Up 
-        elif key in [curses.KEY_UP, ord('k')]: # input up
-            current_row -= 1 # iterate cursor position up by one
-        # Move Task Left 
-        elif key == ord('H'): # input Shift H 
-            move_task(-1) # move the task left one column
-            save_data() # save after every change of state
-        # Move Task Right  
-        elif key == ord('L'): # Input Shift L 
-            move_task(1) # move the task right one column 
-            save_data() # save after every change of state 
-        # Move Task Down 
-        elif key == ord('J'): # Input Shift J 
-            move_within_column(1) # move the task down one position in the column 
-            save_data() # save after every change of state 
-        # Move Task Up 
-        elif key == ord('K'): # Input Shift K 
-            move_within_column(-1) # move thetask up one position in the column 
-            save_data() # save state after every change
-        # Add task 
-        elif key == ord('a'): # input a 
-            task = add_task_modal(stdscr) # build a new task and catch it as an object
-            if task: # if the object has stuff in it, then 
-                data["columns"][COLUMNS[current_col]].append(task) # build the task in the current column 
-                save_data() # save state after every change 
-        # Delete Task
-        elif key == ord('d'): # input d
-            col = COLUMNS[current_col] # determine location 
-            if current_row < len(data["columns"][col]): # If we're not on the [ + ] button
-                task = data["columns"][col][current_row] # get the task 
-                if confirm_modal(stdscr, f"Delete '{task['title']}'?"): # confirmation box yes, then 
-                    delete_task() # do the thing
-                    save_data() # save state after every change 
-        # Press Enter - multi-use/contextual
-        elif key in [10, 13]: # input enter 
-            if current_row >= len(data["columns"][col]): # if we're hovering over [ + ], then 
-                task = add_task_modal(stdscr) # add new task and catch it as an object 
-                if task: # if that object has stuff in it, then 
-                    data["columns"][col].append(task) # add it to the current column 
-                    save_data() # save state after every change 
-            else: # it's not a new task, so 
-                open_task_modal(stdscr, data["columns"][col][current_row]) # we're going to edit the task we're selecting
-                save_data() # save state after every change 
-        # Quit the Program
-        elif key == ord('q'): # input q 
-            save_data() # final save 
-            break # leave the loop, terminating the program 
-        clamp_cursor() # ensure the cursor can't exceed bounds. 
-        needs_redraw = True # set state to need to redraw, for having collected changes above
 
-if __name__ == "__main__": # This must be called directly and not as a library
-    curses.wrapper(main) # begin init & main loop 
+def main(stdscr):
+    # INIT 
+    global current_col, current_index
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_WHITE, -1)
+    curses.init_pair(2, curses.COLOR_GREEN, -1)
+    curses.init_pair(3, curses.COLOR_RED, -1)
+    curses.init_pair(4, curses.COLOR_CYAN, -1)
+    load_data()
+    # SCREEN BUFFER
+    needs_redraw = True 
+    while True:
+        if needs_redraw:
+            draw(stdscr)
+            curses.doupdate()
+            needs_redraw = False 
+    # INPUT 
+        key = stdscr.getch()
+        if key == -1:
+            time.sleep(0.01) # Ensures 60 Hz refresh rate screen buffer, prevents flicker
+            continue 
+        col = COLUMNS[current_col]
+        flat = flatten_tasks(data["columns"][col])
+        # Move Focus Left
+        if key in [curses.KEY_LEFT, ord('h')]:
+            current_col = max(0, current_col - 1)
+            current_index = 0
+        # Move Focus Down 
+        elif key in [curses.KEY_DOWN, ord('j')]:
+            current_index = min(len(flat), current_index + 1)
+        # Move Focus Up 
+        elif key in [curses.KEY_UP, ord('k')]:
+            current_index = max(0, current_index - 1)
+        # Move Focus Right
+        elif key in [curses.KEY_RIGHT, ord('l')]:
+            current_col = min(len(COLUMNS) - 1, current_col + 1)
+            current_index = 0 
+        # Move Task Left 
+        elif key == ord('H'):
+            move_task(-1, flat)
+            save_data()
+        # Move Task Right  
+        elif key == ord('L'):
+            move_task(1, flat)
+            save_data()
+        # Move Task Down 
+        elif key == ord('J'):
+            move_within_column(1, flat)
+            save_data()
+        # Move Task Up 
+        elif key == ord('K'):
+            move_within_column(-1, flat)
+            save_data()
+        # Add Task 
+        elif key == ord('a'):
+            task = add_task_modal(stdscr)
+            if task:
+                data["columns"][col].append(task)
+                save_data()
+        # Add Subtask 
+        elif key == ord('s'):
+            if current_index < len(flat):
+                parent = flat[current_index]["task"]
+                sub = add_task_modal(stdscr)
+                if sub:
+                    parent.setdefault("children", []).append(sub)
+                    save_data()
+        # Complete Task 
+        elif key == ord('c'):
+            if current_index >= len(flat):
+                continue  # you're on [ + ], nothing to delete
+            item = flat[current_index]
+            task = item["task"]
+            children = task.get("children", [])
+            msg = f"Complete '{task['title']}'"
+            if children:
+                msg += f" and {len(children)} subtask(s)?"
+            else:
+                msg += "?"
+            if confirm_modal(stdscr, msg):
+                complete_task(flat)
+                save_data()
+        # Show Completed Tasks Modal / Trophy Screen
+        elif key == ord('C'):  # capital C
+            show_completed_modal(stdscr)
+        # Delete Task 
+        elif key == ord('d'):
+            if current_index >= len(flat):
+                continue  # you're on [ + ], nothing to delete
+            item = flat[current_index]
+            task = item["task"]
+            children = task.get("children", [])
+            msg = f"Delete '{task['title']}'"
+            if children:
+                msg += f" and {len(children)} subtask(s)?"
+            else:
+                msg += "?"
+            if confirm_modal(stdscr, msg):
+                delete_task(flat)
+                save_data()
+        # Press Enter - multi-use/contextual
+        elif key in [10, 13]:  # Enter
+            if current_index >= len(flat): # If we're on the [ + ] row, then
+                task = add_task_modal(stdscr) # we should add a new task 
+                if task: # if the new task exists, then 
+                    data["columns"][col].append(task) # add it to the datatstream
+                    save_data() # save state after every change 
+            else:
+                item = flat[current_index] # Editing an existing task or subtask
+                open_task_modal(stdscr, item["task"]) # open the task we're selecting
+                save_data() # save state after every change
+        # Demote Tasks
+        elif key == 9:  # TAB
+            demote(flat)
+        #Promote Tasks 
+        elif key == 353:  # SHIFT+TAB
+            promote(flat)
+        # Quit The Application
+        elif key == ord('q'):
+            save_data()
+            break 
+
+        needs_redraw = True
+
+if __name__ == "__main__":
+    curses.wrapper(main)
