@@ -517,12 +517,23 @@ def draw(stdscr):
                 label = f"{prefix}{marker} [{task.get('priority','')}] {task['title']}"            
             else:
                 label = "[ + ]"
-            if i == current_col and j == current_index:
-                attr = curses.A_REVERSE | curses.A_BOLD
-            elif i == current_col:
-                attr = curses.A_BOLD
+            priority = task.get("priority", "").lower()
+            if priority == "high":
+                color = curses.color_pair(3)
+            elif priority == "medium":
+                color = curses.color_pair(5)
+            elif priority == "low":
+                color = curses.color_pair(2)
             else:
-                attr = curses.A_NORMAL
+                color = curses.color_pair(1)
+
+            # Preserve selection highlight
+            if i == current_col and j == current_index:
+                attr = color | curses.A_REVERSE | curses.A_BOLD
+            elif i == current_col:
+                attr = color | curses.A_BOLD
+            else:
+                attr = color
             try:
                 if label == "[ + ]": # if this isn't a task, then 
                     centered_x = x + (col_width - len(label)) // 2 # find the center of the column
@@ -551,6 +562,7 @@ def main(stdscr):
     curses.init_pair(2, curses.COLOR_GREEN, -1)
     curses.init_pair(3, curses.COLOR_RED, -1)
     curses.init_pair(4, curses.COLOR_CYAN, -1)
+    curses.init_pair(5, curses.COLOR_YELLOW, -1)
     load_data()
     # SCREEN BUFFER
     needs_redraw = True 
