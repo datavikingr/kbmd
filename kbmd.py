@@ -4,6 +4,7 @@ import os
 import json
 import time
 from datetime import datetime
+from dateutil.parser import parse
 
 COLUMNS = ["Backlog", "In Progress", "Blocked / External"]
 HIDDEN_COLUMN = "Done"
@@ -515,18 +516,18 @@ def draw(stdscr):
                 collapsed = task.get("collapsed", False)
                 marker = "+" if collapsed else "-"
                 label = f"{prefix}{marker} [{task.get('priority','')}] {task['title']}"            
+                priority = task.get("priority", "").lower()
+                if priority == "high":
+                    color = curses.color_pair(3)
+                elif priority == "medium":
+                    color = curses.color_pair(5)
+                elif priority == "low":
+                    color = curses.color_pair(2)
+                else:
+                    color = curses.color_pair(1)
             else:
                 label = "[ + ]"
-            priority = task.get("priority", "").lower()
-            if priority == "high":
-                color = curses.color_pair(3)
-            elif priority == "medium":
-                color = curses.color_pair(5)
-            elif priority == "low":
-                color = curses.color_pair(2)
-            else:
-                color = curses.color_pair(1)
-
+            
             # Preserve selection highlight
             if i == current_col and j == current_index:
                 attr = color | curses.A_REVERSE | curses.A_BOLD
