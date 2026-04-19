@@ -1,0 +1,154 @@
+{
+  "columns": {
+    "Backlog": [
+      {
+        "id": "LOCAL-00010",
+        "title": "build versioning & release infra",
+        "description": "",
+        "priority": "High",
+        "created": "2026-04-09 22:11",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00011",
+        "title": "gsw/novelistr compiler",
+        "description": "",
+        "priority": "High",
+        "created": "2026-04-09 22:12",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00004",
+        "title": "build install tooling",
+        "description": "look at gsw's stuff",
+        "priority": "High",
+        "created": "2026-04-09 22:06",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00005",
+        "title": "hotkey to toggle secret commands",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:07",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00008",
+        "title": "csv import",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:09",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00009",
+        "title": "Jira API integration",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:09",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00006",
+        "title": "better completed UI/page",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:08",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00012",
+        "title": "cursor wrap in main screen",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:13",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00013",
+        "title": "TODO.md awareness",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:14",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      }
+    ],
+    "In Progress": [
+      {
+        "id": "LOCAL-00002",
+        "title": "color the header and footer (purple)",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:05",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00001",
+        "title": "center the command bar",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:04",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00003",
+        "title": "center the commands in modals",
+        "description": "",
+        "priority": "",
+        "created": "2026-04-09 22:05",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      },
+      {
+        "id": "LOCAL-00007",
+        "title": "proper completed dump to plaintext",
+        "description": "",
+        "priority": "Medium",
+        "created": "2026-04-09 22:08",
+        "due": "",
+        "completed_at": null,
+        "collapsed": false,
+        "children": []
+      }
+    ],
+    "Blocked / External": [],
+    "Done": []
+  },
+  "next_id": 14
+}
